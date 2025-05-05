@@ -42,28 +42,27 @@ int funk()
         printf("In child proc: New value global_var: %d, address global_var: %p\n", global_var, address_global);
         _exit(5);
     }
-    if (process > 0)
+
+    sleep(30);
+    printf("In parent proc: Value local_var: %d, address local_var: %p\n", local_var, address_local);
+    printf("In parent proc: Value global_var: %d, address global_var: %p\n", global_var, address_global);
+    int status;
+    pid_t child = wait(&status);
+    if (child == ERROR)
     {
-        sleep(30);
-        printf("In parent proc: Value local_var: %d, address local_var: %p\n", local_var, address_local);
-        printf("In parent proc: Value global_var: %d, address global_var: %p\n", global_var, address_global);
-        int status;
-        pid_t child = wait(&status);
-        if (child == -1)
-        {
-            perror("wait error");
-            return ERROR;
-        }
-        int end_child = WIFEXITED(status);
-        if (end_child == ERROR_WIFEXITED)
-        {
-            int bad_exit = WIFSIGNALED(status);
-            printf("Child process %d ended without ok . killed with signal %i\n", child, bad_exit);
-            return FAILURE;
-        }
-        int exit_child = WEXITSTATUS(status);
-        printf("Child process %d ended with %d status\n", child, exit_child);
+        perror("wait error");
+        return FAILURE;
     }
+    int end_child = WIFEXITED(status);
+    if (end_child == ERROR_WIFEXITED)
+    {
+        int bad_exit = WIFSIGNALED(status);
+        printf("Child process %d ended without ok . killed with signal %i\n", child, bad_exit);
+        return FAILURE;
+    }
+    int exit_child = WEXITSTATUS(status);
+    printf("Child process %d ended with %d status\n", child, exit_child);
+
     return SUCCESS;
 }
 
@@ -75,4 +74,4 @@ int main()
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;
-}
+} 
