@@ -10,6 +10,7 @@
 #define ERROR -1
 #define MIN_PORT 0
 #define MAX_PORT 65535
+#define BLOCK_FLAG 0
 
 int main(int argc, char **argv)
 {
@@ -53,7 +54,7 @@ int main(int argc, char **argv)
     {
         printf("Enter message: ");
         fgets(buffer, BUFFER_SIZE, stdin);
-        msg_len = sendto(socket_fd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        msg_len = sendto(socket_fd, buffer, BUFFER_SIZE, BLOCK_FLAG, (struct sockaddr *)&server_addr, sizeof(server_addr));
         if (msg_len == ERROR)
         {
             close(socket_fd);
@@ -62,7 +63,7 @@ int main(int argc, char **argv)
         }
         memset(&buffer, 0, BUFFER_SIZE);
         socklen_t serverlen = sizeof(server_addr);
-        msg_len = recvfrom(socket_fd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&server_addr, &serverlen);
+        msg_len = recvfrom(socket_fd, buffer, BUFFER_SIZE, BLOCK_FLAG, (struct sockaddr *)&server_addr, &serverlen);
         if (msg_len == ERROR)
         {
             close(socket_fd);
