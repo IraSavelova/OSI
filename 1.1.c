@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #define CREATE_SUCCES 0
 #define THREAD_COUNT 5
-
+#define JOIN_SUCCES 0
 int global_int = 20;
 
 void *mythread(void *arg)
@@ -62,10 +62,16 @@ int main()
 	}
 	for (int i = 0; i < 5; i++)
 	{
-		pthread_join(thread_id[i], &thread_res[i]);
+		int ret = pthread_join(thread_id[i], &thread_res[i]);
+		if (ret != JOIN_SUCCES)
+		{
+			fprintf(stderr, "ERROR: pthread_join");
+			return EXIT_FAILURE;
+		}
 		pthread_t returned_id = (pthread_t)thread_res[i];
 		int res = pthread_equal(thread_id[i], returned_id);
 		printf("Поток %d завершился, res: %d\n", i, res);
 	}
 	return EXIT_SUCCESS;
 }
+
