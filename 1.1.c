@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #define CREATE_SUCCES 0
+#define THREAD_COUNT 5
 
 int global_int = 20;
 
@@ -44,7 +45,8 @@ int main()
 	int err;
 
 	printf("main [%d %d %d]: Hello from main!\n", getpid(), getppid(), gettid());
-	for (int i = 0; i < 5; i++)
+	// sleep(10);
+	for (int i = 0; i < THREAD_COUNT; i++)
 	{
 		printf("thread %d \n", i);
 		err = pthread_create(&thread_id[i], NULL, mythread, NULL);
@@ -53,6 +55,10 @@ int main()
 			printf("main: pthread_create() failed: %s\n", strerror(err));
 			return EXIT_FAILURE;
 		}
+		/*if (i == 4)
+		{
+			sleep(30);
+		}*/
 	}
 	for (int i = 0; i < 5; i++)
 	{
