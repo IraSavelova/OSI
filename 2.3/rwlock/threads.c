@@ -210,10 +210,8 @@ int main()
         {
             printf("main: pthread_join(%s) failed: %s\n", thread_names[i], strerror(join_err));
         }
-        else
-        {
-            printf("Thread %s terminated successfully\n", thread_names[i]);
-        }
+
+        printf("Thread %s terminated successfully\n", thread_names[i]);
     }
 
     printf("\nFINAL STATS:\n");
