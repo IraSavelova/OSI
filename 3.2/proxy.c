@@ -16,8 +16,6 @@
 #define PORT 80
 #define ERROR -1
 #define SUCCESS 0
-#define BEFORE_HOST_URL 0
-#define BEFORE_HOST_HEADER 1
 #define CLOSED 1
 #define NOT_CLOSED 0
 #define DEFAULT_PROTOCOL 0
@@ -43,24 +41,20 @@ void sigint_handler(int sig)
     exit(EXIT_SUCCESS);
 }
 
-int get_host(char *request, char *resolved_host, int before_host_flag)
+int get_host(char *request, char *resolved_host)
 {
     char *host_start;
     const char *host_end;
-
-    if (before_host_flag == BEFORE_HOST_URL)
+    host_start = strstr(request, "http://");
+    if (host_start == NULL)
     {
-        host_start = strstr(request, "http://");
-        if (host_start == NULL)
-        {
-            return ERROR;
-        }
-        host_start += strlen("http://");
-        host_end = strchr(host_start, '/');
-        if (host_end == NULL)
-        {
-            host_end = strchr(host_start, ' ');
-        }
+        return ERROR;
+    }
+    host_start += strlen("http://");
+    host_end = strchr(host_start, '/');
+    if (host_end == NULL)
+    {
+        host_end = strchr(host_start, ' ');
     }
 
     if (host_end == NULL)
@@ -102,12 +96,7 @@ void *handle_client(void *arg)
         return NULL;
     }
 
-    int host_found = get_host(buffer, host, BEFORE_HOST_URL);
-    if (host_found != SUCCESS)
-    {
-        host_found = get_host(buffer, host, BEFORE_HOST_HEADER);
-    }
-
+    int host_found = get_host(buffer, host);
     if (host_found != SUCCESS)
     {
         close(client_socket);
@@ -306,7 +295,6 @@ int main(void)
             close(client_socket);
             continue;
         }
-
         pthread_detach(thread_id);
     }
     close(proxy_socket);
