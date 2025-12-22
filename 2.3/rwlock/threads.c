@@ -13,11 +13,7 @@
 #define MAX_COUNT 10000
 #define SUCCESS 0
 #define SLEEP_TIME 10
-
-size_t global_incr = 0;
-size_t global_decr = 0;
-size_t global_eq = 0;
-size_t global_swaps = 0;
+// сделать так чтобы пользователь мог использовать каунтеры, а их пушить в структуру???
 
 void set_cpu(int n)
 {
@@ -37,19 +33,17 @@ void set_cpu(int n)
     printf("set_cpu: set cpu %d\n", n);
 }
 
-void *stats_printer()
+void *stats_printer(void *arg)
 {
+    Storage *storage = (Storage *)arg;
     set_cpu(0);
     while (1)
     {
         sleep(2);
-        read_lock(&stats_lock);
-        size_t inc = global_incr;
-        size_t dec = global_decr;
-        size_t eq = global_eq;
-        size_t swaps = global_swaps;
-        unlock(&stats_lock);
-
+        size_t inc = get_counter_value(counters_get(&storage->counter, INCR));
+        size_t dec = get_counter_value(counters_get(&storage->counter, DECR));
+        size_t eq = get_counter_value(counters_get(&storage->counter, EQ));
+        size_t swaps = get_counter_value(counters_get(&storage->counter, SWAP));
         printf("STATS: increase=%ld  decrease=%ld  equals=%ld  swaps=%ld\n",
                inc, dec, eq, swaps);
         fflush(stdout);
@@ -67,7 +61,7 @@ void *decrease(void *arg)
     {
         count += list_iteration_pairs(storage, comparison_node, CMP_GREATER);
         pthread_testcancel();
-        up_count(&global_decr);
+        counter_increment(counters_get(&storage->counter, DECR));
     }
     return (void *)(intptr_t)count;
 }
@@ -81,7 +75,7 @@ void *equals(void *arg)
     {
         count += list_iteration_pairs(storage, comparison_node, CMP_EQUAL);
         pthread_testcancel();
-        up_count(&global_eq);
+        counter_increment(counters_get(&storage->counter, EQ));
     }
     return (void *)(intptr_t)count;
 }
@@ -95,7 +89,7 @@ void *increase(void *arg)
     {
         count += list_iteration_pairs(storage, comparison_node, CMP_LESS);
         pthread_testcancel();
-        up_count(&global_incr);
+        counter_increment(counters_get(&storage->counter, INCR));
     }
     return (void *)(intptr_t)count;
 }
@@ -116,7 +110,7 @@ void *random_swapper(void *arg)
     Storage *storage = (Storage *)arg;
     while (true)
     {
-        try_random_swapper(storage, &global_swaps);
+        try_random_swapper(storage);
         pthread_testcancel();
     }
     return NULL;
@@ -153,7 +147,7 @@ int main()
     }
     printf("Storage initialized with %d nodes\n", MAX_COUNT);
 
-    err = pthread_create(&tid_stats, NULL, stats_printer, NULL);
+    err = pthread_create(&tid_stats, NULL, stats_printer, &st);
     if (err != SUCCESS)
     {
         printf("main: pthread_create(stats) failed: %s\n", strerror(err));
@@ -215,10 +209,10 @@ int main()
     }
 
     printf("\nFINAL STATS:\n");
-    printf("Increase iterations: %ld\n", global_incr);
-    printf("Decrease iterations: %ld\n", global_decr);
-    printf("Equals iterations: %ld\n", global_eq);
-    printf("Total swaps: %ld\n", global_swaps);
+    printf("Increase iterations: %ld\n", get_counter_value(counters_get(&(st.counter), INCR)));
+    printf("Decrease iterations: %ld\n", get_counter_value(counters_get(&(st.counter), DECR)));
+    printf("Equals iterations: %ld\n", get_counter_value(counters_get(&(st.counter), EQ)));
+    printf("Total swaps: %ld\n", get_counter_value(counters_get(&(st.counter), SWAP)));
 
     storage_destroy(&st);
 
