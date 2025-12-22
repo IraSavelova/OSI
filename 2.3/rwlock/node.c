@@ -3,6 +3,7 @@
 int storage_init(Storage *st)
 {
     st->first = NULL;
+    counters_init(&st->counter);
     int err = lock_init(&st->stlist_lock, NULL);
     if (err)
     {
@@ -12,12 +13,6 @@ int storage_init(Storage *st)
     return SUCCESS;
 }
 
-void up_count(size_t *global_var)
-{
-    write_lock(&stats_lock);
-    (*global_var)++;
-    unlock(&stats_lock);
-}
 Node *node_create(char *str)
 {
     Node *n = malloc(sizeof(Node));
@@ -41,14 +36,20 @@ Node *node_create(char *str)
 
 void node_destroy(Node *n)
 {
-    int err = pthread_rwlock_destroy(&n->list_lock);
+    int err = lock_destroy(&n->list_lock);
     if (err != SUCCESS)
         printf("node_destroy: pthread_mutex_destroy() failed: %s\n", strerror(err));
     free(n);
 }
 
-void storage_destroy(Storage *st)
+int storage_destroy(Storage *st)
 {
+    int err = counters_destroy(&st->counter);
+    if (err != SUCCESS)
+    {
+        printf("storage_destroy: counters_destroy() failed\n");
+    }
+
     Node *cur = st->first;
 
     while (cur != NULL)
@@ -58,9 +59,13 @@ void storage_destroy(Storage *st)
         cur = next;
     }
     st->first = NULL;
-    int err = pthread_rwlock_destroy(&st->stlist_lock);
+    err = lock_destroy(&st->stlist_lock);
     if (err != SUCCESS)
+    {
         printf("storage_destroy: pthread_mutex_destroy() failed: %s\n", strerror(err));
+        return ERROR;
+    }
+    return SUCCESS;
 }
 
 int list_iteration_pairs(Storage *storage, int (*callback)(Node *a, Node *b), compare_mode_t mode)
@@ -113,7 +118,7 @@ int swap_nodes(Node *prev, Node *current, Node *next)
     return SUCCESS;
 }
 
-int try_random_swapper(Storage *storage, size_t *global_var)
+int try_random_swapper(Storage *storage)
 {
     write_lock(&storage->stlist_lock);
     write_lock(&storage->first->list_lock);
@@ -136,7 +141,7 @@ int try_random_swapper(Storage *storage, size_t *global_var)
         if (next != NULL && rand() % 100 < 50)
         {
             swap_nodes(prev, current, next);
-            up_count(global_var);
+            counter_increment(counters_get(&storage->counter, SWAP));
         }
         unlock(&next->list_lock);
         unlock(&prev->list_lock);
