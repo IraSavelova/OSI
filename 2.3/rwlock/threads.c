@@ -13,7 +13,7 @@
 #define MAX_COUNT 10000
 #define SUCCESS 0
 #define SLEEP_TIME 10
-// сделать так чтобы пользователь мог использовать каунтеры, а их пушить в структуру???
+
 
 void set_cpu(int n)
 {
