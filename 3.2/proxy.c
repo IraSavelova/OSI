@@ -197,8 +197,8 @@ void *handle_client(void *arg)
             FD_SET(client_socket, &readfds);
         if (!server_closed)
             FD_SET(target_socket, &readfds);
-
-        if (select(max_fd + 1, &readfds, NULL, NULL, NULL) == ERROR)
+        err = select(max_fd + 1, &readfds, NULL, NULL, NULL);
+        if (err == ERROR)
             goto error;
 
         /* ===== ОТ КЛИЕНТА К СЕРВЕРУ ===== */
