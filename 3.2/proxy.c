@@ -28,6 +28,7 @@ atomic_ulong active_connections = 0;
 atomic_ulong closed_connections = 0;
 atomic_ulong error_connections = 0;
 atomic_ulong thread_created = 0;
+volatile sig_atomic_t stop_proxy = 0;
 time_t start_time;
 // Структура для передачи данных
 typedef struct
@@ -42,12 +43,12 @@ void sigint_handler(int sig)
 {
     (void)sig;
     printf("\nSIGINT received\n");
+    stop_proxy = 1;
     if (handler_data.socket_ptr != NULL && *handler_data.socket_ptr != ERROR)
     {
         close(*handler_data.socket_ptr);
         *handler_data.socket_ptr = ERROR;
     }
-    exit(EXIT_SUCCESS);
 }
 
 void *monitor_thread(void *arg)
@@ -237,8 +238,8 @@ void *handle_client(void *arg)
                 int header_end = 0;
                 for (int i = 0; i < bytes_read - 3; i++)
                 {
-                    if (buffer[i] == '\r' && buffer[i+1] == '\n' &&
-                        buffer[i+2] == '\r' && buffer[i+3] == '\n')
+                    if (buffer[i] == '\r' && buffer[i + 1] == '\n' &&
+                        buffer[i + 2] == '\r' && buffer[i + 3] == '\n')
                     {
                         header_end = i + 4;
                         break;
@@ -288,7 +289,6 @@ error:
     goto done;
 }
 
-
 int main(void)
 {
     start_time = time(NULL);
@@ -333,7 +333,7 @@ int main(void)
 
     printf("HTTP proxy server listening on port 80\n");
 
-    while (true)
+    while (!stop_proxy)
     {
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
@@ -343,6 +343,8 @@ int main(void)
         if (client_socket == ERROR)
         {
             perror("Error accepting connection");
+            if (stop_proxy)
+                break;
             continue;
         }
         int *socket_for_thread = malloc(sizeof(int));
@@ -367,4 +369,3 @@ int main(void)
     close(proxy_socket);
     return EXIT_SUCCESS;
 }
-
