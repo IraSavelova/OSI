@@ -73,7 +73,7 @@ int get_content_length(char *buffer, int buffer_size)
 {
     char *cl = strcasestr(buffer, "Content-Length:");
     if (cl == NULL)
-        return -1; // Нет Content-Length
+        return ERROR; // Нет Content-Length
 
     cl += strlen("Content-Length:");
     while (*cl == ' ' && (cl - buffer) < buffer_size)
@@ -118,10 +118,8 @@ int get_host(char *request, char *resolved_host, int flag)
 
         host_end = strpbrk(host_start, " \r\n");
     }
-
     if (host_end == NULL)
     {
-
         host_end = host_start + strlen(host_start);
     }
 
@@ -163,7 +161,7 @@ void *handle_client(void *arg)
 
     /* ===== Читаем запрос клиента ===== */
     bytes_read = recv(client_socket, buffer, BUFFER_SIZE, 0);
-    if (bytes_read <= 0)
+    if (bytes_read == ERROR)
         goto error;
 
     if (get_host(buffer, host, BEFORE_HOST_FLAG) != 0)
@@ -171,7 +169,7 @@ void *handle_client(void *arg)
             goto error;
 
     he = gethostbyname(host);
-    if (!he)
+    if (he == NULL)
         goto error;
 
     target_socket = socket(AF_INET, SOCK_STREAM, DEFAULT_PROTOCOL);
@@ -207,15 +205,12 @@ void *handle_client(void *arg)
         if (!client_closed && FD_ISSET(client_socket, &readfds))
         {
             bytes_read = recv(client_socket, buffer, BUFFER_SIZE, 0);
-            if (bytes_read <= 0)
+            if (bytes_read == ERROR)
             {
                 client_closed = CLOSED;
                 shutdown(target_socket, SHUT_WR);
             }
-            else
-            {
-                send(target_socket, buffer, bytes_read, 0);
-            }
+            send(target_socket, buffer, bytes_read, 0);
         }
 
         /* ===== ОТ СЕРВЕРА К КЛИЕНТУ ===== */
@@ -229,7 +224,7 @@ void *handle_client(void *arg)
                 shutdown(client_socket, SHUT_WR);
                 continue;
             }
-            if (bytes_read < 0)
+            if (bytes_read == ERROR)
                 goto error;
 
             /* ---- Парсинг заголовков ---- */
@@ -255,12 +250,6 @@ void *handle_client(void *arg)
                         body_bytes_received += bytes_read - header_end;
                 }
             }
-            else
-            {
-                if (content_length > 0)
-                    body_bytes_received += bytes_read;
-            }
-
             send(client_socket, buffer, bytes_read, 0);
 
             /* ---- Условие завершения ---- */
