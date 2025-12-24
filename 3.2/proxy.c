@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <sys/select.h>
+#include <stdatomic.h>
+#include <time.h>
 
 #define BUFFER_SIZE 8192
 #define PORT 80
@@ -19,7 +21,14 @@
 #define CLOSED 1
 #define NOT_CLOSED 0
 #define DEFAULT_PROTOCOL 0
-
+#define BEFORE_HOST_FLAG 0
+#define AFTER_HOST_FLAG 1
+atomic_ulong total_connections = 0;
+atomic_ulong active_connections = 0;
+atomic_ulong closed_connections = 0;
+atomic_ulong error_connections = 0;
+atomic_ulong thread_created = 0;
+time_t start_time;
 // Структура для передачи данных
 typedef struct
 {
@@ -41,24 +50,77 @@ void sigint_handler(int sig)
     exit(EXIT_SUCCESS);
 }
 
-int get_host(char *request, char *resolved_host)
+void *monitor_thread(void *arg)
+{
+    (void)arg;
+    while (1)
+    {
+        sleep(10);
+        printf("\n===== PROXY MONITOR =====\n");
+        printf("Uptime: %ld sec\n", time(NULL) - start_time);
+        printf("Active connections: %lu\n", atomic_load(&active_connections));
+        printf("Total connections:  %lu\n", atomic_load(&total_connections));
+        printf("Closed connections: %lu\n", atomic_load(&closed_connections));
+        printf("Errors:             %lu\n", atomic_load(&error_connections));
+        printf("Created threads:           %lu\n", atomic_load(&thread_created));
+        printf("=========================\n");
+    }
+    return NULL;
+}
+
+int get_content_length(char *buffer, int buffer_size)
+{
+    char *cl = strcasestr(buffer, "Content-Length:");
+    if (cl == NULL)
+        return -1; // Нет Content-Length
+
+    cl += strlen("Content-Length:");
+    while (*cl == ' ' && (cl - buffer) < buffer_size)
+        cl++;
+
+    int content_length = 0;
+    sscanf(cl, "%d", &content_length);
+    return content_length;
+}
+
+int get_host(char *request, char *resolved_host, int flag)
 {
     char *host_start;
     const char *host_end;
-    host_start = strstr(request, "http://");
-    if (host_start == NULL)
+    if (flag == BEFORE_HOST_FLAG)
     {
-        return ERROR;
+        host_start = strstr(request, "http://");
+        if (host_start == NULL)
+        {
+            return ERROR;
+        }
+        host_start += strlen("http://");
+        host_end = strchr(host_start, '/');
+        if (host_end == NULL)
+        {
+            host_end = strchr(host_start, ' ');
+        }
     }
-    host_start += strlen("http://");
-    host_end = strchr(host_start, '/');
-    if (host_end == NULL)
+    if (flag == AFTER_HOST_FLAG)
     {
-        host_end = strchr(host_start, ' ');
+        host_start = strstr(request, "Host:");
+        if (host_start == NULL)
+        {
+            return ERROR;
+        }
+        host_start += strlen("Host:");
+
+        while (*host_start == ' ')
+        {
+            host_start++;
+        }
+
+        host_end = strpbrk(host_start, " \r\n");
     }
 
     if (host_end == NULL)
     {
+
         host_end = host_start + strlen(host_start);
     }
 
@@ -82,161 +144,154 @@ int get_host(char *request, char *resolved_host)
 void *handle_client(void *arg)
 {
     int client_socket = *(int *)arg;
+    free(arg);
+    atomic_fetch_add(&active_connections, 1);
+
     char buffer[BUFFER_SIZE], host[BUFFER_SIZE];
     int bytes_read;
-    int target_socket;
+    int target_socket = ERROR;
     struct sockaddr_in target_addr;
     struct hostent *he;
-    // Чтение HTTP-запроса от клиента
+
+    int client_closed = NOT_CLOSED;
+    int server_closed = NOT_CLOSED;
+
+    int content_length = -1;
+    int header_processed = 0;
+    int body_bytes_received = 0;
+
+    /* ===== Читаем запрос клиента ===== */
     bytes_read = recv(client_socket, buffer, BUFFER_SIZE, 0);
-    if (bytes_read == ERROR)
-    {
-        perror("Error reading client request");
-        close(client_socket);
-        return NULL;
-    }
+    if (bytes_read <= 0)
+        goto error;
 
-    int host_found = get_host(buffer, host);
-    if (host_found != SUCCESS)
-    {
-        close(client_socket);
-        return NULL;
-    }
+    if (get_host(buffer, host, BEFORE_HOST_FLAG) != 0)
+        if (get_host(buffer, host, AFTER_HOST_FLAG) != 0)
+            goto error;
 
-    printf("Host: %s\n", host);
-
-    // преобразует доменное имя в IP-адрес
     he = gethostbyname(host);
-    if (he == NULL)
-    {
-        perror("gethostbyname");
-        close(client_socket);
-        return NULL;
-    }
-    // Создание сокета для целевого сервера
+    if (!he)
+        goto error;
+
     target_socket = socket(AF_INET, SOCK_STREAM, DEFAULT_PROTOCOL);
     if (target_socket == ERROR)
-    {
-        perror("Error creating server socket");
-        close(client_socket);
-        return NULL;
-    }
+        goto error;
 
     memset(&target_addr, 0, sizeof(target_addr));
     target_addr.sin_family = AF_INET;
     target_addr.sin_port = htons(PORT);
     memcpy(&target_addr.sin_addr, he->h_addr_list[0], he->h_length);
-    // подключение к целевому серверу
     int err = connect(target_socket, (struct sockaddr *)&target_addr, sizeof(target_addr));
     if (err == ERROR)
-    {
-        perror("Error connecting to target server");
-        close(client_socket);
-        close(target_socket);
-        return NULL;
-    }
-    // Отправляет оригинальный HTTP-запрос дальше
-    err = send(target_socket, buffer, bytes_read, 0);
-    if (err == ERROR)
-    {
-        perror("Error send to target server");
-        close(client_socket);
-        close(target_socket);
-        return NULL;
-    }
-    fd_set readfds; // Набор дескрипторов для отслеживания чтения
-    int max_fd = (client_socket > target_socket) ? client_socket : target_socket;
-    int client_closed = NOT_CLOSED;
-    int server_closed = NOT_CLOSED;
+        goto error;
 
-    while (!client_closed && !server_closed) // пока оба соединения открыты
+    send(target_socket, buffer, bytes_read, 0);
+
+    fd_set readfds;
+    int max_fd = (client_socket > target_socket) ? client_socket : target_socket;
+
+    /* ===== ОСНОВНОЙ ЦИКЛ ===== */
+    while (!client_closed || !server_closed)
     {
-        FD_ZERO(&readfds); // Очистка набора (все биты в 0)
+        FD_ZERO(&readfds);
         if (!client_closed)
             FD_SET(client_socket, &readfds);
         if (!server_closed)
             FD_SET(target_socket, &readfds);
 
-        err = select(max_fd + 1, &readfds, NULL, NULL, NULL);
-        if (err == ERROR)
-        {
-            perror("Error select");
-            close(client_socket);
-            close(target_socket);
-            return NULL;
-        }
+        if (select(max_fd + 1, &readfds, NULL, NULL, NULL) == ERROR)
+            goto error;
 
+        /* ===== ОТ КЛИЕНТА К СЕРВЕРУ ===== */
         if (!client_closed && FD_ISSET(client_socket, &readfds))
         {
             bytes_read = recv(client_socket, buffer, BUFFER_SIZE, 0);
-            if (bytes_read == 0)
+            if (bytes_read <= 0)
             {
                 client_closed = CLOSED;
-                perror("Client closed connection\n");
-                continue;
+                shutdown(target_socket, SHUT_WR);
             }
-
-            if (bytes_read == ERROR)
+            else
             {
-                client_closed = CLOSED;
-                perror("Error reading from client\n");
-                continue;
-            }
-
-            int total_sent = 0;
-            while (total_sent < bytes_read)
-            {
-                int bytes_sent = send(target_socket, buffer + total_sent, bytes_read - total_sent, 0);
-                if (bytes_sent <= 0)
-                {
-                    server_closed = CLOSED;
-                    perror("Error sending to server");
-                    break;
-                }
-                total_sent += bytes_sent;
+                send(target_socket, buffer, bytes_read, 0);
             }
         }
 
+        /* ===== ОТ СЕРВЕРА К КЛИЕНТУ ===== */
         if (!server_closed && FD_ISSET(target_socket, &readfds))
         {
-            // чтение данных от клиента в буфер
             bytes_read = recv(target_socket, buffer, BUFFER_SIZE, 0);
+
             if (bytes_read == 0)
             {
                 server_closed = CLOSED;
-                perror("Server closed connection\n");
+                shutdown(client_socket, SHUT_WR);
                 continue;
             }
+            if (bytes_read < 0)
+                goto error;
 
-            if (bytes_read == ERROR)
+            /* ---- Парсинг заголовков ---- */
+            if (!header_processed)
             {
-                server_closed = CLOSED;
-                perror("Error reading from server\n");
-                continue;
-            }
-
-            int total_sent = 0;
-            // отправка данных серверу
-            while (total_sent < bytes_read)
-            {
-                int bytes_sent = send(client_socket, buffer + total_sent, bytes_read - total_sent, 0);
-                if (bytes_sent == ERROR)
+                int header_end = 0;
+                for (int i = 0; i < bytes_read - 3; i++)
                 {
-                    client_closed = CLOSED;
-                    perror("Error sending to client");
-                    break;
+                    if (buffer[i] == '\r' && buffer[i+1] == '\n' &&
+                        buffer[i+2] == '\r' && buffer[i+3] == '\n')
+                    {
+                        header_end = i + 4;
+                        break;
+                    }
                 }
-                total_sent += bytes_sent;
+
+                if (header_end > 0)
+                {
+                    content_length = get_content_length(buffer, header_end);
+                    header_processed = 1;
+
+                    if (content_length > 0)
+                        body_bytes_received += bytes_read - header_end;
+                }
+            }
+            else
+            {
+                if (content_length > 0)
+                    body_bytes_received += bytes_read;
+            }
+
+            send(client_socket, buffer, bytes_read, 0);
+
+            /* ---- Условие завершения ---- */
+            if (content_length > 0 && body_bytes_received >= content_length)
+            {
+                shutdown(client_socket, SHUT_WR);
+                shutdown(target_socket, SHUT_WR);
+                server_closed = CLOSED;
+                client_closed = CLOSED;
             }
         }
     }
-    close(client_socket);
-    close(target_socket);
+
+done:
+    if (client_socket != ERROR)
+        close(client_socket);
+    if (target_socket != ERROR)
+        close(target_socket);
+
+    atomic_fetch_add(&closed_connections, 1);
+    atomic_fetch_sub(&active_connections, 1);
     return NULL;
+
+error:
+    atomic_fetch_add(&error_connections, 1);
+    goto done;
 }
+
 
 int main(void)
 {
+    start_time = time(NULL);
     int proxy_socket = ERROR;
 
     // Инициализируем структуру данных
@@ -246,7 +301,9 @@ int main(void)
     signal(SIGINT, sigint_handler);
     struct sockaddr_in proxy_addr;
     pthread_t thread_id;
-
+    pthread_t mon;
+    pthread_create(&mon, NULL, monitor_thread, NULL);
+    pthread_detach(mon);
     proxy_socket = socket(AF_INET, SOCK_STREAM, DEFAULT_PROTOCOL);
     if (proxy_socket == ERROR)
     {
@@ -278,25 +335,36 @@ int main(void)
 
     while (true)
     {
-        int client_socket;
         struct sockaddr_in client_addr;
         socklen_t client_addr_len = sizeof(client_addr);
 
-        client_socket = accept(proxy_socket, (struct sockaddr *)&client_addr, &client_addr_len);
+        int client_socket = accept(proxy_socket, (struct sockaddr *)&client_addr, &client_addr_len);
+        printf("[MAIN] Accepted socket %d\n", client_socket);
         if (client_socket == ERROR)
         {
             perror("Error accepting connection");
             continue;
         }
-        int ptr_create = pthread_create(&thread_id, NULL, handle_client, (void *)&client_socket);
+        int *socket_for_thread = malloc(sizeof(int));
+        if (socket_for_thread == NULL)
+        {
+            perror("malloc failed");
+            close(client_socket);
+            continue;
+        }
+        *socket_for_thread = client_socket;
+        atomic_fetch_add(&total_connections, 1);
+        int ptr_create = pthread_create(&thread_id, NULL, handle_client, (void *)socket_for_thread);
         if (ptr_create == ERROR)
         {
             perror("Error creating thread");
             close(client_socket);
             continue;
         }
+        atomic_fetch_add(&thread_created, 1);
         pthread_detach(thread_id);
     }
     close(proxy_socket);
     return EXIT_SUCCESS;
 }
+
